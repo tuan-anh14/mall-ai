@@ -23,12 +23,23 @@ LABEL_NAMES = {0: "SAFE", 1: "TOXIC", 2: "SPAM"}
 
 
 def _normalize(text: str) -> str:
-    """Chuẩn hóa văn bản đầu vào trước khi vectorize."""
+    """
+    Chuẩn hóa văn bản trước khi vectorize:
+    - Strip obfuscation (đ.m → đm, v*c*l → vcl, d1t → dit)
+    - Chuẩn hóa URL và số điện thoại
+    """
     text = text.lower()
+    # L33tspeak
+    for char, repl in [('4','a'), ('1','i'), ('3','e'), ('0','o'), ('@','a'), ('$','s')]:
+        text = text.replace(char, repl)
+    # Xóa ký tự ngăn cách giữa hai ký tự chữ (đ.m → đm, v*c*l → vcl)
+    text = re.sub(r'(?<=\w)[.\-*_+!](?=\w)', '', text)
+    # Thu gọn khoảng trắng giữa chữ đơn lẻ (đ m m → đmm)
+    text = re.sub(r'\b(\w)\s+(?=\w\b)', r'\1', text)
     # Bỏ URL
-    text = re.sub(r"https?://\S+|www\.\S+", " url ", text)
-    # Bỏ số điện thoại (0xxxxxxxxx hoặc +84xxxxxxxxx)
-    text = re.sub(r"(\+84|0)[0-9]{8,10}", " phone ", text)
+    text = re.sub(r"https?://\S+|www\.\S+|\S+\.(com|net|org|vn|me)/\S*", " url ", text)
+    # Bỏ số điện thoại (có hoặc không có dấu cách)
+    text = re.sub(r"(\+84|0)[\s\-.]?[0-9]{2,4}[\s\-.]?[0-9]{3,4}[\s\-.]?[0-9]{3,4}", " phone ", text)
     # Chuẩn hóa dấu cách
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -81,8 +92,9 @@ def train_and_save(model_path: Union[str, Path], extra_texts: Optional[List[str]
         )),
         ("clf", LogisticRegression(
             max_iter=1000,
-            C=1.0,
+            C=0.8,
             solver="lbfgs",
+            class_weight="balanced",  # Xử lý imbalanced classes
             random_state=42,
         )),
     ])
