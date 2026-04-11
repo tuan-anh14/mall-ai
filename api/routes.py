@@ -2,6 +2,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from core.engine import engine
+from core.text_moderator import text_moderator
+from config import settings
 
 router = APIRouter()
 
@@ -45,5 +47,37 @@ def retrain():
         train_and_save()
         engine.reload()
         return RetrainResponse(success=True, message="Model retrained and reloaded successfully.")
+    except Exception as exc:
+        return RetrainResponse(success=False, message=str(exc))
+
+
+# ─── Moderation ───────────────────────────────────────────────────────────────
+
+class ModerateTextRequest(BaseModel):
+    text: str
+
+
+class ModerateTextResponse(BaseModel):
+    allowed: bool
+    label: str
+    score: float
+
+
+@router.post("/moderate/text", response_model=ModerateTextResponse)
+def moderate_text(req: ModerateTextRequest):
+    result = text_moderator.predict(req.text, threshold=settings.moderation_threshold)
+    return ModerateTextResponse(**result)
+
+
+@router.post("/moderate/retrain")
+def moderate_retrain():
+    try:
+        from core.moderation_trainer import train_and_save as moderation_train_and_save
+        accuracy = moderation_train_and_save(settings.moderation_model_path)
+        text_moderator.reload(settings.moderation_model_path)
+        return RetrainResponse(
+            success=True,
+            message=f"Moderation model retrained. Accuracy: {accuracy:.4f}",
+        )
     except Exception as exc:
         return RetrainResponse(success=False, message=str(exc))

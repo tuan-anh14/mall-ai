@@ -10,8 +10,13 @@ class Settings(BaseSettings):
     min_interactions: int = 5
     top_k_default: int = 12
 
+    # Moderation
+    moderation_model_path: str = "./models/moderation_model.pkl"
+    moderation_threshold: float = 0.7
+
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
 MODEL_PATH = Path(settings.model_path)
+MODERATION_MODEL_PATH = Path(settings.moderation_model_path)

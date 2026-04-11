@@ -16,7 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router
 from core.engine import engine
-from config import settings
+from core.text_moderator import text_moderator
+from config import settings, MODERATION_MODEL_PATH
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,9 +28,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: load model
+    # Startup: load models
     logger.info("Loading recommendation model...")
     engine.load()
+    logger.info("Loading moderation model...")
+    text_moderator.load(MODERATION_MODEL_PATH)
     yield
     # Shutdown
     logger.info("Shutting down mall-ai service.")

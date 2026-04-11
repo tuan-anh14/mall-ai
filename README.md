@@ -1,27 +1,37 @@
-# mall-ai — AI Recommendation Service
+# mall-ai — AI Service
 
-Dịch vụ gợi ý sản phẩm thông minh cho hệ thống ShopHub, xây dựng bằng **Python 3.10+** và **FastAPI**. Chạy song song với `mall-be` trên cổng **8001**.
+Dịch vụ AI cho hệ thống ShopHub, xây dựng bằng **Python 3.10+** và **FastAPI**. Chạy song song với `mall-be` trên cổng **8001**.
+
+Cung cấp hai module độc lập:
+- **Recommendation Engine** — Gợi ý sản phẩm dựa trên hành vi người dùng (SVD + Content-Based)
+- **Text Moderation Engine** — Kiểm duyệt bình luận tự động (TF-IDF + Logistic Regression, train tại chỗ, không cần API key)
+
+---
 
 ## Kiến trúc tổng quan
 
 ```
 NestJS (mall-be)
     │
-    │  POST /recommend   →  Gợi ý cho user
-    │  POST /similar     →  Sản phẩm tương tự
+    ├── POST /recommend          →  Gợi ý sản phẩm cho user
+    ├── POST /similar            →  Sản phẩm tương tự
+    ├── POST /moderate/text      →  Kiểm duyệt bình luận
+    └── POST /moderate/retrain   →  Train lại model kiểm duyệt
     ▼
 FastAPI (mall-ai :8001)
     │
-    ├── Cấp 2 — Collaborative Filtering (SVD)
-    │       "Người mua X cũng mua Y"
-    │       Dựa trên hành vi cộng đồng (view, wishlist, order)
+    ├── Recommendation Engine
+    │       Collaborative Filtering (SVD) — "Người mua X cũng mua Y"
+    │       Content-Based Similarity — cosine similarity trên đặc trưng sản phẩm
     │
-    └── Content-Based Similarity
-            Cosine similarity trên vector đặc trưng sản phẩm
-            (category, brand, price, rating)
+    └── Text Moderation Engine
+            Regex pre-filter — blacklist từ khóa cứng (instant)
+            TF-IDF Vectorizer (unigram+bigram, 10k features)
+            Logistic Regression (SAFE / TOXIC / SPAM)
+            ~92% accuracy trên seed dataset 582 mẫu tiếng Việt
 ```
 
-Khi AI Service không bật, `mall-be` tự động fallback về **Cấp 1** (content-based đơn giản tích hợp sẵn trong NestJS) — hệ thống luôn hoạt động.
+Khi `mall-ai` không bật hoặc timeout, `mall-be` **tự động fallback** — hệ thống không bao giờ bị gián đoạn vì AI service.
 
 ---
 
@@ -29,25 +39,30 @@ Khi AI Service không bật, `mall-be` tự động fallback về **Cấp 1** (c
 
 ```
 mall-ai/
-├── main.py                 # FastAPI app, điểm khởi chạy
-├── config.py               # Cấu hình từ .env (Pydantic Settings)
-├── requirements.txt        # Danh sách thư viện
-├── .env.example            # Mẫu biến môi trường
+├── main.py                      # FastAPI app, điểm khởi chạy
+├── config.py                    # Cấu hình từ .env (Pydantic Settings)
+├── requirements.txt             # Danh sách thư viện
 │
 ├── core/
-│   ├── data_loader.py      # Kết nối PostgreSQL, tạo ma trận tương tác
-│   ├── features.py         # Feature engineering, cosine similarity
-│   ├── trainer.py          # Train SVD + lưu model vào disk
-│   └── engine.py           # Singleton engine: load model, serve dự đoán
+│   ├── data_loader.py           # Kết nối PostgreSQL, tạo ma trận tương tác
+│   ├── features.py              # Feature engineering, cosine similarity
+│   ├── trainer.py               # Train SVD + lưu recommendation model
+│   ├── engine.py                # Singleton: load/serve recommendation model
+│   ├── seed_data.py             # 582 mẫu text tiếng Việt có nhãn (SAFE/TOXIC/SPAM)
+│   ├── moderation_trainer.py    # Train TF-IDF + Logistic Regression pipeline
+│   └── text_moderator.py        # Singleton: load/predict/reload moderation model
 │
 ├── api/
-│   └── routes.py           # Các endpoint FastAPI
+│   └── routes.py                # Tất cả endpoint FastAPI
 │
-├── models/                 # Model đã train (*.pkl) — bỏ qua bởi .gitignore
+├── models/                      # Model đã train (*.pkl) — bỏ qua bởi .gitignore
+│   ├── recommendation_model.pkl
+│   └── moderation_model.pkl
 │
 └── tests/
-    ├── test_engine.py      # Unit test cho feature engineering
-    └── test_api.py         # Integration test cho API endpoints
+    ├── test_engine.py           # Unit test cho recommendation engine
+    ├── test_api.py              # Integration test cho API
+    └── test_moderation.py       # Unit test cho text moderation (11 cases)
 ```
 
 ---
@@ -56,7 +71,9 @@ mall-ai/
 
 - Python **3.10+**
 - PostgreSQL đang chạy (cùng DB với `mall-be`)
-- `mall-be` đã chạy và có dữ liệu (view history, orders, wishlist)
+- `mall-be` đã chạy và có dữ liệu (cho recommendation engine)
+
+> Text moderation **không cần DB** — chạy hoàn toàn local từ seed data.
 
 ---
 
@@ -66,14 +83,12 @@ mall-ai/
 
 ```bash
 cd mall-ai
-
-# Tạo venv (Python 3.11)
 python3.11 -m venv .venv
 
-# Kích hoạt (macOS/Linux)
+# macOS/Linux
 source .venv/bin/activate
 
-# Kích hoạt (Windows)
+# Windows
 .venv\Scripts\activate
 ```
 
@@ -103,9 +118,11 @@ HOST=0.0.0.0
 MODEL_PATH=./models/recommendation_model.pkl
 MIN_INTERACTIONS=5
 TOP_K_DEFAULT=12
-```
 
-> `DATABASE_URL` phải trỏ đúng đến DB của `mall-be`.
+# Moderation
+MODERATION_MODEL_PATH=./models/moderation_model.pkl
+MODERATION_THRESHOLD=0.7
+```
 
 ### 4. Khởi chạy server
 
@@ -113,213 +130,261 @@ TOP_K_DEFAULT=12
 # Cách 1 — chạy trực tiếp
 python main.py
 
-# Cách 2 — dùng uvicorn (khuyến nghị khi dev)
+# Cách 2 — uvicorn (khuyến nghị khi dev)
 uvicorn main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-Server sẽ chạy tại `http://localhost:8001`.
-Tài liệu API (Swagger UI) tại `http://localhost:8001/docs`.
+Server tại `http://localhost:8001` · Swagger UI tại `http://localhost:8001/docs`
 
-### 5. Train model (bắt buộc lần đầu)
+### 5. Train models (lần đầu)
 
 ```bash
-# Qua API (server phải đang chạy)
+# Train recommendation model (cần có dữ liệu trong DB)
 curl -X POST http://localhost:8001/retrain
 
-# Hoặc chạy trực tiếp
-python -m core.trainer
+# Train moderation model (chỉ cần seed data — không cần DB)
+curl -X POST http://localhost:8001/moderate/retrain
 ```
 
-> Model được lưu tại `models/recommendation_model.pkl`. Nếu chưa train, service vẫn khởi động bình thường nhưng sẽ trả về `[]` cho `/recommend`.
-
----
-
-## Train Model
-
-Model cần được train trước khi có thể trả về kết quả AI. **Bước này bắt buộc sau lần cài đặt đầu tiên.**
-
-### Cách 1 — Qua API (khi server đang chạy)
-
-```bash
-curl -X POST http://localhost:8001/retrain
-```
-
-### Cách 2 — Chạy trực tiếp
-
-```bash
-python -m core.trainer
-```
-
-**Quá trình train:**
-
-```
-1. Load dữ liệu từ PostgreSQL
-   ├── product_view_histories  → 1.0 điểm/lượt xem (tối đa 10)
-   ├── wishlist_items          → 3.0 điểm
-   └── order_items             → 5.0 điểm/đơn hàng
-
-2. Tạo User-Item Interaction Matrix
-   [userId × productId → score tổng hợp]
-
-3. Train SVD (Singular Value Decomposition)
-   n_factors=50, n_epochs=20
-   → Học các pattern ẩn từ hành vi người dùng
-
-4. Tính Content-Based Similarity Matrix
-   → Cosine similarity trên vector [category, brand, price, rating]
-
-5. Lưu vào models/recommendation_model.pkl
-```
-
-> **Khi nào nên retrain?** Sau khi có thêm nhiều dữ liệu mới (vài trăm đơn hàng, view history). Có thể schedule chạy `POST /retrain` định kỳ (ví dụ: mỗi đêm).
+> Nếu chưa train moderation model, service vẫn hoạt động bằng **regex fallback** (blacklist từ khóa cứng). Gọi `/moderate/retrain` để nâng cấp lên ML model.
 
 ---
 
 ## API Endpoints
 
+### Recommendation
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| `GET` | `/health` | Kiểm tra trạng thái service |
+| `POST` | `/recommend` | Gợi ý sản phẩm cho user |
+| `POST` | `/similar` | Sản phẩm tương tự |
+| `POST` | `/retrain` | Train lại recommendation model |
+
+### Text Moderation
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| `POST` | `/moderate/text` | Kiểm duyệt một đoạn văn bản |
+| `POST` | `/moderate/retrain` | Train lại moderation model |
+
+---
+
 ### `GET /health`
 
-Kiểm tra trạng thái service.
-
 ```json
-// Response
-{
-  "status": "ok",
-  "model_ready": true
-}
+{ "status": "ok", "model_ready": true }
 ```
 
 ---
 
 ### `POST /recommend`
 
-Lấy danh sách sản phẩm gợi ý cho một user.
-
 ```json
 // Request
-{
-  "userId": "clxyz123abc",
-  "limit": 12
-}
+{ "userId": "clxyz123abc", "limit": 12 }
 
 // Response
-{
-  "productIds": ["prod_a", "prod_b", "prod_c", ...]
-}
+{ "productIds": ["prod_a", "prod_b", "prod_c"] }
 ```
-
-**Thuật toán:**
-1. Dùng SVD để dự đoán điểm số user-product cho toàn bộ catalog
-2. Loại trừ sản phẩm user đã xem/mua
-3. Trả về top-K có điểm cao nhất
-
-Nếu model chưa train → trả về `[]` (NestJS tự fallback Cấp 1).
 
 ---
 
 ### `POST /similar`
 
-Lấy danh sách sản phẩm tương tự cho một sản phẩm.
+```json
+// Request
+{ "productId": "clxyz456def", "limit": 8 }
+
+// Response
+{ "productIds": ["prod_x", "prod_y", "prod_z"] }
+```
+
+---
+
+### `POST /moderate/text`
+
+Kiểm duyệt một đoạn văn bản. Trả về nhãn `SAFE`, `TOXIC`, hoặc `SPAM` cùng confidence score.
 
 ```json
 // Request
-{
-  "productId": "clxyz456def",
-  "limit": 8
-}
+{ "text": "Sản phẩm tốt, giao hàng nhanh" }
 
-// Response
-{
-  "productIds": ["prod_x", "prod_y", "prod_z", ...]
-}
+// Response — bình luận an toàn
+{ "allowed": true, "label": "SAFE", "score": 0.89 }
 ```
 
-**Thuật toán:** Cosine similarity trên vector đặc trưng sản phẩm (category + brand + price + rating).
+```json
+// Request
+{ "text": "đmm shop lừa đảo khốn nạn" }
+
+// Response — vi phạm
+{ "allowed": false, "label": "TOXIC", "score": 0.97 }
+```
+
+```json
+// Request
+{ "text": "Inbox mình để mua giá rẻ hơn 0909123456" }
+
+// Response — spam
+{ "allowed": false, "label": "SPAM", "score": 0.91 }
+```
+
+**Logic phân loại:**
+- Regex pre-filter chạy trước để bắt ngay số điện thoại, URL, ký tự lặp, từ khóa social spam
+- Nếu regex không bắt được → ML model (TF-IDF + LR) dự đoán
+- Chỉ chặn khi confidence ≥ `MODERATION_THRESHOLD` (mặc định 0.7)
+
+---
+
+### `POST /moderate/retrain`
+
+Train lại moderation model từ seed data (+ dữ liệu thực tế nếu có).
+
+```json
+// Response
+{ "success": true, "message": "Moderation model retrained. Accuracy: 0.9205" }
+```
 
 ---
 
 ### `POST /retrain`
 
-Trigger train lại model từ dữ liệu DB hiện tại.
+Train lại recommendation model từ DB.
 
 ```json
-// Response (thành công)
-{
-  "success": true,
-  "message": "Model retrained and reloaded successfully."
-}
-
-// Response (lỗi)
-{
-  "success": false,
-  "message": "Not enough data to train model."
-}
+// Response
+{ "success": true, "message": "Model retrained and reloaded successfully." }
 ```
+
+---
+
+## Text Moderation — Chi tiết
+
+### Cách hoạt động
+
+```
+Input text
+    │
+    ▼
+Regex pre-filter (instant, không cần model)
+    ├── Số điện thoại: 0xxxxxxxxx, +84xxxxxxxxx → SPAM
+    ├── URL: http://, www. → SPAM
+    ├── Ký tự lặp ≥11 lần: aaaaaaaaaaaaa → SPAM
+    ├── Social SPAM: "inbox mình", "zalo tôi" → SPAM
+    └── Blacklist từ tục: dm, vcl, khốn, ngu... → TOXIC
+    │
+    ▼ (nếu regex không bắt được)
+ML Model (TF-IDF + Logistic Regression)
+    │
+    ▼
+{ allowed, label, score }
+```
+
+### Seed dataset
+
+`core/seed_data.py` chứa **582 mẫu** tiếng Việt gán nhãn thủ công:
+
+| Label | Số mẫu | Ví dụ |
+|-------|--------|-------|
+| `SAFE` (0) | 215 | "Sản phẩm tốt, giao hàng nhanh", "Chất lượng ổn với giá tiền" |
+| `TOXIC` (1) | 157 | Bình luận chửi bới, xúc phạm, lăng mạ |
+| `SPAM` (2) | 210 | Số điện thoại, URL, gibberish, quảng cáo chui |
+
+### Fallback khi chưa train
+
+Nếu `models/moderation_model.pkl` chưa tồn tại → service dùng regex blacklist cứng (tức thì, không cần load gì). Gọi `POST /moderate/retrain` để nâng cấp lên ML model.
+
+### Retrain với dữ liệu thực tế
+
+```python
+# Trong moderation_trainer.py
+train_and_save(
+    model_path="./models/moderation_model.pkl",
+    extra_texts=["bình luận thực tế 1", "bình luận thực tế 2"],
+    extra_labels=[0, 1],  # 0=SAFE, 1=TOXIC, 2=SPAM
+)
+```
+
+Admin có thể trigger retrain qua `POST /admin/moderation/retrain` trên `mall-be`.
+
+---
+
+## Recommendation Engine — Chi tiết
+
+### Quá trình train
+
+```
+1. Load dữ liệu từ PostgreSQL
+   ├── product_view_histories  → 1.0 điểm/lượt xem (tối đa 10)
+   ├── wishlist_items          → 3.0 điểm
+   └── order_items             → 5.0 điểm
+
+2. Tạo User-Item Interaction Matrix [userId × productId → score]
+
+3. Train SVD (n_factors=50, n_epochs=20)
+   → Học pattern ẩn từ hành vi người dùng
+
+4. Tính Content-Based Similarity Matrix
+   → Cosine similarity trên vector [category, brand, price, rating]
+
+5. Lưu models/recommendation_model.pkl
+```
+
+> **Khi nào nên retrain?** Sau khi tích lũy thêm nhiều dữ liệu (vài trăm đơn hàng, view history). Có thể schedule `POST /retrain` định kỳ mỗi đêm.
 
 ---
 
 ## Chạy Tests
 
 ```bash
-# Chạy toàn bộ test suite
+# Toàn bộ test suite
 python -m pytest tests/ -v
 
-# Chỉ unit tests (không cần DB)
-python -m pytest tests/test_engine.py -v
+# Chỉ moderation tests (không cần DB)
+python -m pytest tests/test_moderation.py -v
 
-# Chỉ API tests
-python -m pytest tests/test_api.py -v
+# Chỉ engine tests
+python -m pytest tests/test_engine.py -v
 ```
 
 Kết quả mong đợi:
 
 ```
-tests/test_engine.py::test_get_similar_basic        PASSED
-tests/test_engine.py::test_get_similar_excludes_self PASSED
-tests/test_engine.py::test_get_similar_exclude_ids  PASSED
-tests/test_engine.py::test_get_similar_unknown_product PASSED
-tests/test_engine.py::test_build_product_vectors    PASSED
-tests/test_api.py::test_health                      PASSED
-tests/test_api.py::test_recommend                   PASSED
-tests/test_api.py::test_similar                     PASSED
-```
+tests/test_moderation.py::test_safe_text                    PASSED
+tests/test_moderation.py::test_safe_text_empty              PASSED
+tests/test_moderation.py::test_toxic_text_vn                PASSED
+tests/test_moderation.py::test_toxic_explicit               PASSED
+tests/test_moderation.py::test_spam_phone                   PASSED
+tests/test_moderation.py::test_spam_url                     PASSED
+tests/test_moderation.py::test_spam_repeated_chars          PASSED
+tests/test_moderation.py::test_safe_review                  PASSED
+tests/test_moderation.py::test_safe_neutral                 PASSED
+tests/test_moderation.py::test_predict_returns_required_keys PASSED
+tests/test_moderation.py::test_train_and_predict            PASSED
 
----
-
-## Luồng hoạt động đầy đủ
-
-```
-User xem sản phẩm
-       │
-       ▼
-mall-fe gọi POST /api/v1/view-history/track
-       │
-       ▼
-mall-be lưu vào bảng product_view_histories
-       │
-       ▼ (khi user vào HomePage)
-mall-fe gọi GET /api/v1/recommendations
-       │
-       ▼
-mall-be: thử gọi POST http://localhost:8001/recommend
-       │
-       ├── AI available? ──YES──▶ Trả về SVD predictions
-       │
-       └── AI unavailable? ─NO──▶ Fallback: content-based
-                                   (cùng category/brand với lịch sử xem)
+tests/test_engine.py::test_get_similar_basic                PASSED
+tests/test_engine.py::test_get_similar_excludes_self        PASSED
+tests/test_engine.py::test_get_similar_exclude_ids          PASSED
+tests/test_engine.py::test_get_similar_unknown_product      PASSED
+tests/test_engine.py::test_build_product_vectors            PASSED
 ```
 
 ---
 
 ## Tích hợp với mall-be
 
-`mall-be` giao tiếp với `mall-ai` qua HTTP. Cấu hình URL trong `mall-be/.env`:
+Cấu hình URL trong `mall-be/.env`:
 
 ```env
 AI_SERVICE_URL=http://localhost:8001
 ```
 
-Nếu `mall-ai` không chạy hoặc timeout (>3s), `mall-be` **tự động fallback** về thuật toán Cấp 1 — không có lỗi nào hiển thị ra người dùng.
+**Recommendation:** `mall-be` gọi `/recommend` và `/similar`, fallback về content-based nội bộ nếu timeout.
+
+**Moderation:** `mall-be` gọi `/moderate/text` trước khi lưu Review/Reply. Nếu timeout (3s) → **cho bình luận qua** (không chặn oan).
+
+Admin retrain moderation qua: `POST /admin/moderation/retrain` trên `mall-be`.
 
 ---
 
@@ -329,8 +394,8 @@ Nếu `mall-ai` không chạy hoặc timeout (>3s), `mall-be` **tự động fal
 |---|---|---|
 | FastAPI | 0.115.6 | Web framework |
 | uvicorn | 0.34.0 | ASGI server |
+| scikit-learn | 1.6.0 | TF-IDF, Logistic Regression, Cosine similarity |
 | scikit-surprise | 1.1.4 | SVD Collaborative Filtering |
-| scikit-learn | 1.6.0 | Cosine similarity, preprocessing |
 | pandas | 2.2.3 | Xử lý dữ liệu |
 | numpy | 2.2.1 | Tính toán ma trận |
 | SQLAlchemy | 2.0.36 | Kết nối PostgreSQL |
@@ -341,22 +406,22 @@ Nếu `mall-ai` không chạy hoặc timeout (>3s), `mall-be` **tự động fal
 
 ## Xử lý sự cố thường gặp
 
+**Moderation model chưa có — service vẫn hoạt động?**
+Đúng. Service dùng regex fallback khi chưa có `models/moderation_model.pkl`. Gọi `POST /moderate/retrain` để tạo ML model.
+
 **`scikit-surprise` không cài được:**
 ```bash
 # macOS
-xcode-select --install
-pip install scikit-surprise
-
+xcode-select --install && pip install scikit-surprise
 # Linux
-sudo apt-get install python3-dev build-essential
-pip install scikit-surprise
+sudo apt-get install python3-dev build-essential && pip install scikit-surprise
 ```
 
-**`Model file not found` khi khởi động:**
-Service vẫn khởi động bình thường. Gọi `POST /retrain` hoặc chạy `python -m core.trainer` để tạo model.
+**`Model file not found` (recommendation) khi khởi động:**
+Service vẫn khởi động. Gọi `POST /retrain` hoặc chạy `python -m core.trainer`.
 
 **`Not enough interactions to train CF model`:**
-Cần ít nhất `MIN_INTERACTIONS=5` dòng trong bảng `product_view_histories`. Tăng số lượng dữ liệu hoặc giảm ngưỡng trong `.env`.
+Cần ít nhất `MIN_INTERACTIONS=5` dòng trong `product_view_histories`. Giảm ngưỡng trong `.env` hoặc thêm dữ liệu.
 
 **Kết nối DB thất bại:**
-Kiểm tra `DATABASE_URL` trong `.env` — phải khớp với `mall-be/.env`.
+Kiểm tra `DATABASE_URL` trong `.env` — phải khớp với `mall-be/.env`. Moderation không cần DB nên vẫn hoạt động độc lập.
