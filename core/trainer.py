@@ -67,7 +67,7 @@ def train_and_save():
     cf_model = train_cf_model(interactions)
 
     # --- Content-Based ---
-    product_matrix, product_ids, cat_enc, brand_enc, scaler = build_product_vectors(products)
+    product_matrix, product_ids, _, _, scaler = build_product_vectors(products)
     sim_matrix = compute_similarity_matrix(product_matrix)
 
     # Build user history index for fast recommendation
@@ -81,8 +81,7 @@ def train_and_save():
         "product_ids": product_ids,
         "similarity_matrix": sim_matrix,
         "user_history": user_history,
-        "all_product_ids": interactions["productId"].unique().tolist(),
-        "encoders": {"category": cat_enc, "brand": brand_enc, "scaler": scaler},
+        "encoders": {"scaler": scaler},
     }
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)

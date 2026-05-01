@@ -79,6 +79,7 @@ def load_product_features() -> pd.DataFrame:
                 FROM products p
                 LEFT JOIN categories c ON c.id = p."categoryId"
                 WHERE p.status = 'ACTIVE'
+                ORDER BY p."ratingAverage" DESC
             """),
             conn,
         )

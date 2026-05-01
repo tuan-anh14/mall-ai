@@ -4,33 +4,34 @@ for content-based similarity search.
 """
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 def build_product_vectors(products_df: pd.DataFrame):
     """
     Encode product features into a numeric matrix.
-    Returns (matrix, product_ids).
+    Uses one-hot encoding for categorical features (category, brand) so that
+    cosine similarity is computed over semantically meaningful dimensions.
+    Returns (matrix, product_ids, None, None, scaler).
     """
     df = products_df.copy().fillna({"brand": "unknown", "categoryName": "unknown"})
 
-    cat_enc = LabelEncoder()
-    brand_enc = LabelEncoder()
-
-    df["cat_encoded"] = cat_enc.fit_transform(df["categoryName"].astype(str))
-    df["brand_encoded"] = brand_enc.fit_transform(df["brand"].astype(str))
+    # One-hot encode nominal categoricals — avoids spurious ordinal distances
+    # that LabelEncoder would introduce (e.g. cat 3 ≈ cat 4 ≠ cat 1).
+    cat_dummies = pd.get_dummies(df["categoryName"].astype(str), prefix="cat")
+    brand_dummies = pd.get_dummies(df["brand"].astype(str), prefix="brand")
 
     scaler = MinMaxScaler()
     numeric = scaler.fit_transform(df[["price", "ratingAverage"]].fillna(0))
 
-    matrix = np.column_stack([
-        df["cat_encoded"].values,
-        df["brand_encoded"].values,
+    matrix = np.hstack([
+        cat_dummies.values.astype(float),
+        brand_dummies.values.astype(float),
         numeric,
     ])
 
-    return matrix, df["productId"].tolist(), cat_enc, brand_enc, scaler
+    return matrix, df["productId"].tolist(), None, None, scaler
 
 
 def compute_similarity_matrix(matrix: np.ndarray) -> np.ndarray:

@@ -47,8 +47,12 @@ class RecommendationEngine:
         viewed = set(user_history.get(user_id, []))
         candidates = [pid for pid in product_ids if pid not in viewed]
 
-        if cf_model is not None and hasattr(cf_model, "predict"):
-            # SVD predictions
+        # Only run SVD for users whose history was in the training data.
+        # Cold-start users would otherwise get global-mean scores for every
+        # candidate, making the sort order essentially random.
+        is_known_user = user_id in user_history
+
+        if cf_model is not None and hasattr(cf_model, "predict") and is_known_user:
             predictions = []
             for pid in candidates:
                 try:
@@ -59,7 +63,7 @@ class RecommendationEngine:
             predictions.sort(key=lambda x: x[1], reverse=True)
             return [pid for pid, _ in predictions[:limit]]
 
-        # Fallback: return most popular candidates (by position in product_ids list)
+        # Fallback: popularity order (product_ids is sorted by ratingAverage DESC)
         return candidates[:limit]
 
     def similar_products(
